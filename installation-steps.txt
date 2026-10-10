@@ -1,0 +1,350 @@
+=====================================================================
+ OPENSHIFT CLUSTER ON AWS (IPI) - STEP BY STEP
+ Cluster: testoc.openshiftoc.tk   |   Region: ap-south-1 (Mumbai)
+ Credentials mode: Mint           |   Network: OVNKubernetes
+=====================================================================
+
+Run everything from a Linux workstation / bastion (RHEL, Rocky, Ubuntu).
+Do NOT run the installer as a throw-away shell - keep the install
+directory safe, it is needed later to destroy the cluster.
+
+
+---------------------------------------------------------------------
+STEP 0 - PRE-CHECKLIST
+---------------------------------------------------------------------
+[ ] AWS account with permission to create IAM users
+[ ] Domain "openshiftoc.tk" under your control (you can edit its NS records)
+[ ] Red Hat account -> pull secret from https://console.redhat.com/openshift/install/pull-secret
+[ ] Linux machine with internet access, 4 GB RAM, ~5 GB free disk
+[ ] AWS service quotas are enough (see Step 4)
+
+Tools needed: curl, unzip, tar, ssh-keygen, dig (bind-utils / dnsutils)
+
+  RHEL/Rocky/Alma :  sudo dnf install -y curl unzip tar openssh-clients bind-utils
+  Ubuntu/Debian   :  sudo apt update && sudo apt install -y curl unzip tar openssh-client dnsutils
+
+
+---------------------------------------------------------------------
+STEP 1 - INSTALL AWS CLI v2
+---------------------------------------------------------------------
+cd /tmp
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip -q awscliv2.zip
+sudo ./aws/install
+
+# verify
+aws --version
+
+
+---------------------------------------------------------------------
+STEP 2 - CREATE IAM USER FOR THE INSTALLER
+---------------------------------------------------------------------
+Mint mode needs a credential that can create IAM users/roles, so the
+simplest option is AdministratorAccess (fine for a lab / training
+cluster; use a scoped custom policy for production).
+
+Option A - AWS Console
+  IAM -> Users -> Create user -> name: samuel
+  Permissions -> Attach policies directly -> AdministratorAccess
+  Security credentials -> Create access key (use case: CLI)
+  Save the Access Key ID and Secret Access Key.
+
+Option B - Using an existing admin profile on the CLI
+  aws iam create-user --user-name samuel
+  aws iam attach-user-policy --user-name samuel \
+      --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+  aws iam create-access-key --user-name samuel
+
+Configure the CLI with the new user:
+
+  aws configure
+    AWS Access Key ID     : <your key>
+    AWS Secret Access Key : <your secret>
+    Default region name   : ap-south-1
+    Default output format : json
+
+# verify identity and region
+aws sts get-caller-identity
+aws configure get region
+
+
+---------------------------------------------------------------------
+STEP 3 - ROUTE 53 PUBLIC HOSTED ZONE FOR baseDomain
+---------------------------------------------------------------------
+The installer requires a PUBLIC Route 53 hosted zone matching
+baseDomain (openshiftoc.tk).
+
+# check if it already exists
+aws route53 list-hosted-zones-by-name --dns-name openshiftoc.tk
+
+# create it if missing
+aws route53 create-hosted-zone \
+    --name openshiftoc.tk \
+    --caller-reference "ocp-$(date +%s)"
+
+# get the 4 name servers of the zone
+ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name openshiftoc.tk \
+    --query 'HostedZones[0].Id' --output text)
+aws route53 get-hosted-zone --id "$ZONE_ID" \
+    --query 'DelegationSet.NameServers'
+
+Now go to your domain registrar / DNS provider for openshiftoc.tk and
+set the NS records to those 4 AWS name servers.
+
+# verify delegation (wait until it returns the AWS name servers;
+# can take minutes to hours)
+dig NS openshiftoc.tk +short
+
+
+---------------------------------------------------------------------
+STEP 4 - CHECK AWS SERVICE QUOTAS (ap-south-1)
+---------------------------------------------------------------------
+Peak usage during install = bootstrap + 1 master + 1 worker
+  -> 3 x t2.xlarge = 12 vCPU (bootstrap is removed after install)
+
+Check / raise in Service Quotas console:
+  - EC2: "Running On-Demand Standard (A, C, D, H, I, M, R, T, Z) instances"
+         (needs >= 12 vCPU; new accounts often start with low limits)
+  - EC2: EC2-VPC Elastic IPs (>= 1-2)  (single AZ -> 1 NAT gateway)
+  - VPC: VPCs per region, NAT gateways per AZ, Internet gateways
+  - EBS: Provisioned IOPS SSD (io1) IOPS and storage limits
+
+Quick CLI check of the vCPU quota:
+  aws service-quotas get-service-quota --service-code ec2 \
+      --quota-code L-1216C47A --region ap-south-1 \
+      --query 'Quota.Value'
+
+
+---------------------------------------------------------------------
+STEP 5 - GENERATE SSH KEY (if you do not have one)
+---------------------------------------------------------------------
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/ocp_key
+cat ~/.ssh/ocp_key.pub
+
+Copy the FULL public key line - it goes in "sshKey" in install-config.yaml.
+Use it later to debug nodes:  ssh -i ~/.ssh/ocp_key core@<node-ip>
+
+
+---------------------------------------------------------------------
+STEP 6 - DOWNLOAD OPENSHIFT INSTALLER AND oc CLIENT
+---------------------------------------------------------------------
+mkdir -p ~/ocp-aws && cd ~/ocp-aws
+
+# "stable" = latest stable release. To pin a version replace "stable"
+# with e.g. "stable-4.16" or a full version such as "4.16.20".
+BASE=https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable
+
+curl -LO $BASE/openshift-install-linux.tar.gz
+curl -LO $BASE/openshift-client-linux.tar.gz
+
+tar xvf openshift-install-linux.tar.gz openshift-install
+tar xvf openshift-client-linux.tar.gz oc kubectl
+
+sudo mv oc kubectl /usr/local/bin/
+# keep openshift-install in the working directory (or move it too)
+
+# verify
+./openshift-install version
+oc version --client
+
+
+---------------------------------------------------------------------
+STEP 7 - CREATE install-config.yaml
+---------------------------------------------------------------------
+mkdir -p ~/ocp-aws/testoc && cd ~/ocp-aws/testoc
+vi install-config.yaml
+
+Paste the content below, then REPLACE:
+  - sshKey     -> your real public key (Step 5)
+  - pullSecret -> your pull secret JSON (Step 0), keep the single quotes
+
+---------- install-config.yaml (start) ----------
+apiVersion: v1
+baseDomain: openshiftoc.tk
+credentialsMode: Mint
+
+metadata:
+  name: testoc
+
+controlPlane:
+  name: master
+  hyperthreading: Enabled
+  replicas: 1
+  platform:
+    aws:
+      zones:
+        - ap-south-1a
+      rootVolume:
+        iops: 400
+        size: 100
+        type: io1
+      type: t2.xlarge
+
+compute:
+  - name: worker
+    hyperthreading: Enabled
+    replicas: 1
+    platform:
+      aws:
+        zones:
+          - ap-south-1a
+        rootVolume:
+          iops: 200
+          size: 100
+          type: io1
+        type: t2.xlarge
+
+networking:
+  clusterNetwork:
+    - cidr: 10.128.0.0/14
+      hostPrefix: 23
+  machineNetwork:
+    - cidr: 10.0.0.0/16
+  networkType: OVNKubernetes
+  serviceNetwork:
+    - 172.30.0.0/16
+
+platform:
+  aws:
+    region: ap-south-1
+
+sshKey: "ssh-ed25519 AAAA...your-full-public-key... root@server"
+pullSecret: 'Copy here'
+---------- install-config.yaml (end) ----------
+
+IMPORTANT: The installer CONSUMES (deletes) install-config.yaml when it
+runs. Keep a backup copy outside the directory first:
+
+  cp install-config.yaml ~/ocp-aws/install-config.yaml.bak
+
+Optional - validate and generate manifests without creating anything:
+  cd ~/ocp-aws
+  ./openshift-install create manifests --dir testoc
+  (this also consumes install-config.yaml, so restore from the backup
+   afterwards if you want to continue with "create cluster")
+
+
+---------------------------------------------------------------------
+STEP 8 - CREATE THE CLUSTER
+---------------------------------------------------------------------
+cd ~/ocp-aws
+./openshift-install create cluster --dir testoc --log-level=info
+
+- Takes roughly 40-60 minutes.
+- Creates: VPC, subnets, NAT/IGW, load balancers, security groups,
+  Route 53 records, IAM roles/users, bootstrap + master + worker EC2.
+- Detailed log: ~/ocp-aws/testoc/.openshift_install.log
+- If your terminal disconnects, run inside tmux/screen, or resume with:
+    ./openshift-install wait-for install-complete --dir testoc
+
+On success the installer prints the console URL, kubeadmin user and
+password.
+
+
+---------------------------------------------------------------------
+STEP 9 - LOGIN AND VERIFY
+---------------------------------------------------------------------
+export KUBECONFIG=~/ocp-aws/testoc/auth/kubeconfig
+
+oc whoami
+oc get nodes
+oc get clusteroperators          # all should be Available=True
+oc get clusterversion
+oc get pods -A | grep -v -E 'Running|Completed'
+
+Web console:
+  https://console-openshift-console.apps.testoc.openshiftoc.tk
+  user     : kubeadmin
+  password : cat ~/ocp-aws/testoc/auth/kubeadmin-password
+
+CLI login with kubeadmin:
+  oc login -u kubeadmin -p "$(cat ~/ocp-aws/testoc/auth/kubeadmin-password)" \
+     https://api.testoc.openshiftoc.tk:6443
+
+
+---------------------------------------------------------------------
+STEP 10 - POST-INSTALL (OPTIONAL)
+---------------------------------------------------------------------
+- Add an identity provider (HTPasswd) and create normal users, then
+  remove kubeadmin:   oc delete secret kubeadmin -n kube-system
+- Back up the whole ~/ocp-aws/testoc directory (kubeconfig, metadata.json,
+  terraform state). metadata.json is REQUIRED for destroy.
+- Certificates: the cluster uses self-signed certs by default; replace
+  ingress/API certs if you need trusted ones.
+- Cost control for training labs: destroy the cluster when not needed.
+
+
+---------------------------------------------------------------------
+STEP 11 - DESTROY THE CLUSTER (CLEANUP)
+---------------------------------------------------------------------
+cd ~/ocp-aws
+./openshift-install destroy cluster --dir testoc --log-level=info
+
+This removes all AWS resources created by the installer. The Route 53
+hosted zone you created manually in Step 3 is NOT deleted. Delete the IAM
+installer user too if you no longer need it.
+
+
+---------------------------------------------------------------------
+NOTES ON YOUR install-config.yaml (READ BEFORE RUNNING)
+---------------------------------------------------------------------
+1. controlPlane replicas: 1
+   Standard OpenShift IPI on AWS expects 3 control plane nodes. A single
+   control plane node is not a supported/HA layout and, depending on the
+   OpenShift version, the installer may reject it or the install may be
+   unstable. If validation fails, set replicas: 3 (needs 12 vCPU more
+   quota and more cost).
+
+2. Instance type t2.xlarge
+   t2 is an old, burstable family (CPU credits, not EBS-optimized, so
+   the io1 IOPS you request may not be fully delivered). It meets the
+   4 vCPU / 16 GB minimum but can be slow or unstable for etcd under
+   load. Better choice in Mumbai: m5.xlarge (same 4 vCPU / 16 GB) or
+   m6i.xlarge. Check availability in your AZ:
+     aws ec2 describe-instance-type-offerings --location-type availability-zone \
+       --filters Name=instance-type,Values=t2.xlarge,m5.xlarge \
+       --region ap-south-1 --query 'InstanceTypeOfferings[].[InstanceType,Location]'
+
+3. io1 volumes
+   io1 limit is 50 IOPS per GiB: 100 GiB allows up to 5000 IOPS, so your
+   400 / 200 values are valid. io1 costs more than gp3; gp3 is the
+   usual default for lab clusters (set type: gp3, remove iops).
+
+4. credentialsMode: Mint
+   The admin keys from "aws configure" are stored in the cluster
+   (kube-system/aws-creds) and used to mint per-component credentials.
+   Fine for labs. For stricter security use Passthrough, or Manual with
+   STS (ccoctl).
+
+5. Single zone (ap-south-1a)
+   Works, but gives no zone-level fault tolerance.
+
+6. baseDomain / .tk
+   .tk domains were run by Freenom, which stopped new registrations.
+   Make sure you can still edit the NS records for openshiftoc.tk,
+   otherwise API and *.apps DNS will not resolve and the install will
+   time out waiting for the console / ingress.
+
+7. sshKey / pullSecret
+   Replace the placeholders with real values. A truncated key or the
+   text 'Copy here' will cause "invalid install config" errors.
+
+
+---------------------------------------------------------------------
+TROUBLESHOOTING
+---------------------------------------------------------------------
+- "No public hosted zone found for domain": Step 3 not done, or the
+  zone name does not match baseDomain exactly.
+- Quota errors (VcpuLimitExceeded, AddressLimitExceeded): raise quotas
+  in Service Quotas, wait for approval, run destroy, then retry.
+- Failed install: ALWAYS run "openshift-install destroy cluster --dir testoc"
+  before re-running create, otherwise leftover resources clash.
+- Bootstrap timeout: check ~/ocp-aws/testoc/.openshift_install.log, and
+  gather logs:
+    ./openshift-install gather bootstrap --dir testoc
+- Cannot open the console: check "dig api.testoc.openshiftoc.tk +short"
+  and "dig console-openshift-console.apps.testoc.openshiftoc.tk +short".
+
+=====================================================================
+ END
+=====================================================================
