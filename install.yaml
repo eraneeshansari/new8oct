@@ -1,0 +1,45 @@
+apiVersion: v1
+baseDomain: openshiftDomain.com  ## tour domain name here ...
+credentialsMode: Mint
+metadata:
+  name: testoc  # name of your cluster ..
+controlPlane:
+  name: master
+  hyperthreading: Enabled
+  replicas: 1
+  platform:
+    aws:
+      zones:
+        - ap-south-1a
+      rootVolume:
+        iops: 400
+        size: 100
+        type: io1
+      type: t2.xlarge
+compute:
+  - name: worker
+    hyperthreading: Enabled
+    replicas: 1
+    platform:
+      aws:
+        zones:
+          - ap-south-1a
+        rootVolume:
+          iops: 200
+          size: 100
+          type: io1
+        type: t2.xlarge
+networking:
+  clusterNetwork:
+    - cidr: 10.128.0.0/14
+      hostPrefix: 23
+  machineNetwork:
+    - cidr: 10.0.0.0/16
+  networkType: OVNKubernetes
+  serviceNetwork:
+    - 172.30.0.0/16
+platform:
+  aws:
+    region: ap-south-1
+sshKey: "ssh-ed25519 AAAACN/qtj root@server"  ## generate public key and add here ....
+pullSecret: 'Copy here'  ## Copy pull secret from console.redhat.com/openshift # i shared that link...
