@@ -1,5 +1,5 @@
 =====================================================================
- OPENSHIFT CLUSTER ON AWS (IPI) - STEP BY STEP
+ OPENSHIFT Self-Managed CLUSTER ON AWS (IPI) - STEP BY STEP  
  Cluster: testoc.openshiftoc.tk   |   Region: ap-south-1 (Mumbai)
  Credentials mode: Mint           |   Network: OVNKubernetes
 =====================================================================
