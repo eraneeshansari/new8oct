@@ -1,0 +1,231 @@
+==============================================================
+OKD ON AWS (IPI INSTALL): STEP-BY-STEP GUIDE
+==============================================================
+
+Base domain : openshiftoc.tk
+Cluster name: testoc
+Region      : ap-south-1 (Mumbai)
+Topology    : 1 control plane + 1 worker (lab setup)
+
+
+--------------------------------------------------------------
+1. PREREQUISITES
+--------------------------------------------------------------
+- A Linux workstation (or VM) with internet access, plus:
+  aws CLI v2, dig, jq, ssh-keygen
+- An AWS account with enough quota in ap-south-1 (EC2 vCPUs,
+  Elastic IPs, VPCs, NAT gateways). Check Service Quotas.
+- A PUBLIC Route53 hosted zone for openshiftoc.tk. The installer
+  needs it to create the api and *.apps records.
+
+
+--------------------------------------------------------------
+2. SET UP DNS IN ROUTE53
+--------------------------------------------------------------
+aws route53 create-hosted-zone --name openshiftoc.tk --caller-reference $(date +%s)
+aws route53 list-hosted-zones-by-name --dns-name openshiftoc.tk
+
+Copy the 4 NS records from the zone and set them as nameservers
+at your domain registrar. Then verify:
+
+dig NS openshiftoc.tk +short
+
+The result must show the AWS nameservers before you continue.
+
+NOTE ON .tk: Freenom stopped issuing and managing .tk domains, so
+make sure you can still edit its nameservers. If you can't, use a
+domain you control, or a subdomain delegated to Route53
+(e.g. okd.yourdomain.com).
+
+
+--------------------------------------------------------------
+3. CONFIGURE AWS CREDENTIALS
+--------------------------------------------------------------
+With credentialsMode: Mint, the installer uses your credentials to
+create separate, narrower IAM users for in-cluster operators. Your
+installer credentials therefore need broad IAM and EC2 rights. For
+a lab, AdministratorAccess is simplest.
+
+aws configure          # access key, secret, region ap-south-1
+aws sts get-caller-identity
+
+Check that your instance type is offered in your zone:
+
+aws ec2 describe-instance-type-offerings --location-type availability-zone \
+  --filters Name=instance-type,Values=m5.xlarge --region ap-south-1 \
+  --query "InstanceTypeOfferings[].Location"
+
+
+--------------------------------------------------------------
+4. DOWNLOAD THE OKD INSTALLER AND CLIENT
+--------------------------------------------------------------
+Get the latest stable release from the OKD releases page:
+https://github.com/okd-project/okd/releases
+
+Release tags look like 4.xx.0-okd-scos.N. Use the OKD tarballs,
+not the OpenShift ones from Red Hat.
+
+export OKD_VERSION=<tag from the releases page>
+curl -LO https://github.com/okd-project/okd/releases/download/$OKD_VERSION/openshift-install-linux-$OKD_VERSION.tar.gz
+curl -LO https://github.com/okd-project/okd/releases/download/$OKD_VERSION/openshift-client-linux-$OKD_VERSION.tar.gz
+
+tar xzf openshift-install-linux-*.tar.gz openshift-install
+tar xzf openshift-client-linux-*.tar.gz oc kubectl
+sudo mv openshift-install oc kubectl /usr/local/bin/
+
+openshift-install version    # release image should point to quay.io/okd/...
+
+
+--------------------------------------------------------------
+5. GENERATE THE SSH KEY AND PULL SECRET
+--------------------------------------------------------------
+ssh-keygen -t ed25519 -f ~/.ssh/okd_key -N ""
+cat ~/.ssh/okd_key.pub
+
+OKD does NOT need a Red Hat pull secret. Use a placeholder:
+
+pullSecret: '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}'
+
+(You only need a real pull secret if you want to pull Red Hat
+registry images.)
+
+
+--------------------------------------------------------------
+6. FIX UP YOUR install-config.yaml
+--------------------------------------------------------------
+Recommended changes:
+
+- type: t2.xlarge -> m5.xlarge or m6i.xlarge
+  (T2 is burstable and old-generation; CPU credits run out during
+  install and etcd suffers.)
+- rootVolume.type: io1 -> gp3
+  (Cheaper and fine for a lab. Keep io1 only if you want it.)
+- controlPlane.replicas: 1 is OK for a lab but unsupported for
+  production. If the installer rejects it, use 3.
+- sshKey / pullSecret: fill in as described in step 5.
+
+Revised file:
+
+------------------------ install-config.yaml ------------------
+apiVersion: v1
+baseDomain: openshiftoc.tk
+credentialsMode: Mint
+metadata:
+  name: testoc
+controlPlane:
+  name: master
+  hyperthreading: Enabled
+  replicas: 1
+  platform:
+    aws:
+      zones:
+        - ap-south-1a
+      rootVolume:
+        size: 120
+        type: gp3
+      type: m5.xlarge
+compute:
+  - name: worker
+    hyperthreading: Enabled
+    replicas: 1
+    platform:
+      aws:
+        zones:
+          - ap-south-1a
+        rootVolume:
+          size: 100
+          type: gp3
+        type: m5.xlarge
+networking:
+  clusterNetwork:
+    - cidr: 10.128.0.0/14
+      hostPrefix: 23
+  machineNetwork:
+    - cidr: 10.0.0.0/16
+  networkType: OVNKubernetes
+  serviceNetwork:
+    - 172.30.0.0/16
+platform:
+  aws:
+    region: ap-south-1
+sshKey: "ssh-ed25519 AAAA...your-public-key..."
+pullSecret: '{"auths":{"fake":{"auth":"aWQ6cGFzcwo="}}}'
+---------------------------------------------------------------
+
+
+--------------------------------------------------------------
+7. PREPARE THE INSTALL DIRECTORY
+--------------------------------------------------------------
+The installer CONSUMES install-config.yaml, so keep a backup.
+
+mkdir okd-install
+cp install-config.yaml okd-install/
+cp install-config.yaml install-config.yaml.bak
+
+
+--------------------------------------------------------------
+8. CREATE THE CLUSTER
+--------------------------------------------------------------
+openshift-install create cluster --dir=okd-install --log-level=debug
+
+This takes about 40-60 minutes. It creates the VPC, subnets, NAT
+gateway, load balancers, Route53 records, a temporary bootstrap
+node, the master and the worker. At the end it prints the console
+URL, the kubeadmin password, and the kubeconfig path.
+
+If the command is interrupted, resume waiting with:
+
+openshift-install wait-for bootstrap-complete --dir=okd-install
+openshift-install wait-for install-complete --dir=okd-install
+
+
+--------------------------------------------------------------
+9. ACCESS THE CLUSTER
+--------------------------------------------------------------
+export KUBECONFIG=$PWD/okd-install/auth/kubeconfig
+oc get nodes
+oc get co                      # all operators should be Available=True
+oc get clusterversion
+cat okd-install/auth/kubeadmin-password
+
+Console URL: https://console-openshift-console.apps.testoc.openshiftoc.tk
+Login      : kubeadmin / <password from the file above>
+
+
+--------------------------------------------------------------
+10. TROUBLESHOOTING
+--------------------------------------------------------------
+- Install fails at bootstrap:
+  Run: openshift-install gather bootstrap --dir=okd-install
+  Then check the bootstrap journal logs (bootkube.service).
+
+- DNS errors or timeouts on api.testoc...:
+  The hosted zone delegation (step 2) is almost always the cause.
+
+- InsufficientInstanceCapacity or unsupported instance in zone:
+  Change the instance type or the AZ.
+
+- Operators stuck Degraded (ingress, authentication):
+  Check: oc describe co <name>
+  A single worker with limited resources is the usual cause.
+
+- Quota errors:
+  Raise the vCPU and Elastic IP limits in Service Quotas.
+
+
+--------------------------------------------------------------
+11. COST WARNING AND CLEANUP
+--------------------------------------------------------------
+Running costs come from the NAT gateway, Elastic IPs, load
+balancers, EBS volumes, and the two EC2 instances. This is not
+cheap to leave running. When you're done:
+
+openshift-install destroy cluster --dir=okd-install --log-level=debug
+
+KEEP the okd-install directory. The destroy command needs the
+metadata inside it to find and remove all resources. If you lose
+it, you'd have to clean up by hand.
+
+==============================================================
+END OF GUIDE
+==============================================================
