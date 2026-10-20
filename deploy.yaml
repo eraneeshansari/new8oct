@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: mydep
+  name: mydep
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mydep
+  template:
+    metadata:
+      labels:
+        app: mydep
+    spec:
+      containers:
+      - image: nginx:1.30.6
+        name: con1
+        ports:
+        - containerPort: 80
+      - name: con2
+        image: tomcat:latest
+        ports:
+        - containerPort: 8080
