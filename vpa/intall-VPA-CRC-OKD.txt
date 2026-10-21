@@ -1,0 +1,169 @@
+VPA installation Only For OKD 
+OKD 4.22 — Update Pull Secret and Enable VPA Catalog
+Step 1: Verify cluster access
+oc whoami
+oc get clusterversion
+oc get secret pull-secret -n openshift-config
+
+
+Confirm the cluster is healthy and you have cluster-admin privileges.
+
+Step 2: Set the pull secret file path
+export PULL_SECRET_FILE="$HOME/Downloads/pull-secret.txt"
+
+test -f "$PULL_SECRET_FILE" || {
+  echo "ERROR: Pull secret file not found"
+  exit 1
+}
+
+Step 3: Validate the downloaded pull secret
+
+Ensure jq is installed, then run:
+
+jq -e '.auths and (.auths | type == "object")' \
+  "$PULL_SECRET_FILE" >/dev/null || {
+    echo "ERROR: Invalid pull secret JSON"
+    exit 1
+  }
+
+echo "Pull secret JSON structure is valid"
+
+
+This validates the JSON structure, not the credentials themselves.
+
+Step 4: Back up the existing global pull secret
+mkdir -p "$HOME/okd-pull-secret-backup"
+chmod 700 "$HOME/okd-pull-secret-backup"
+
+oc get secret pull-secret -n openshift-config \
+  -o jsonpath='{.data.\.dockerconfigjson}' \
+  | base64 -d \
+  > "$HOME/okd-pull-secret-backup/pull-secret-before.json"
+
+chmod 600 "$HOME/okd-pull-secret-backup/pull-secret-before.json"
+
+Step 5: Back up the OperatorHub configuration
+oc get operatorhub cluster -o yaml \
+  > "$HOME/okd-pull-secret-backup/operatorhub-before.yaml"
+
+chmod 600 "$HOME/okd-pull-secret-backup/operatorhub-before.yaml"
+
+Step 6: Update the global pull secret
+
+IMPORTANT: The global pull secret affects image pulls across the cluster. Make sure the downloaded file includes all registry credentials required by your cluster before replacing the existing contents.
+
+oc set data secret/pull-secret \
+  -n openshift-config \
+  --from-file=.dockerconfigjson="$PULL_SECRET_FILE"
+
+
+The cluster will propagate the updated credentials to its nodes. Allow time for propagation.
+
+Step 7: Verify the updated pull secret
+oc get secret pull-secret -n openshift-config
+
+oc get secret pull-secret -n openshift-config \
+  -o jsonpath='{.data.\.dockerconfigjson}' \
+  | base64 -d \
+  | jq -e '.auths | keys'
+
+
+The second command prints registry names, not credentials.
+
+Step 8: Check cluster health before changing catalogs
+oc get clusteroperators
+oc get nodes
+oc get pods -n openshift-marketplace
+
+
+If new image-pull failures, degraded operators, or NotReady nodes appear, investigate before proceeding.
+
+Step 9: Review the current OperatorHub configuration
+oc get operatorhub cluster -o yaml
+oc get catalogsource -n openshift-marketplace
+
+
+Your current configuration includes:
+
+spec:
+  disableAllDefaultSources: true
+  sources:
+    - name: community-operators
+      disabled: false
+
+
+Your status also shows:
+
+status:
+  sources:
+    - disabled: true
+      name: redhat-operators
+      status: Success
+    - disabled: true
+      name: certified-operators
+      status: Success
+    - disabled: false
+      name: community-operators
+      status: Success
+
+
+This means redhat-operators is disabled. Its Success status does not mean it is enabled.
+
+Step 10: Enable the Red Hat Operators catalog
+
+The documented VPA installation path requires the Red Hat Operators catalog and the appropriate pull-secret access. Verify that your credentials and catalog access are suitable for your OKD environment before enabling it.
+
+Edit the configuration:
+
+oc edit operatorhub cluster
+
+
+Update the spec section to:
+
+spec:
+  disableAllDefaultSources: false
+  sources:
+    - name: redhat-operators
+      disabled: false
+    - name: certified-operators
+      disabled: true
+    - name: community-operators
+      disabled: false
+
+
+Save and exit.
+
+IMPORTANT: This enables the default catalog sources except those explicitly disabled. Review the implications for your cluster before applying the change.
+
+Step 11: Verify catalog availability
+oc get operatorhub cluster -o yaml
+oc get catalogsource -n openshift-marketplace
+oc get pods -n openshift-marketplace
+
+
+Look for the redhat-operators catalog and check whether it is healthy.
+
+Step 12: Check whether VPA is available
+oc get packagemanifests -n openshift-marketplace \
+  | grep -Ei 'vertical|autoscal'
+
+
+If vertical-pod-autoscaler appears, inspect its package details:
+
+oc describe packagemanifest vertical-pod-autoscaler \
+  -n openshift-marketplace
+
+
+If the package is available, follow the installation instructions for your OKD release and select the operator-recommended namespace.
+
+Step 13: If the catalog or VPA is still missing
+oc describe catalogsource redhat-operators \
+  -n openshift-marketplace
+
+oc get events -n openshift-marketplace \
+  --sort-by='.lastTimestamp'
+
+
+Check catalog errors and confirm that the VPA package is published and compatible with your environment.
+
+Updating the pull secret and enabling a catalog do not guarantee that VPA will be available.

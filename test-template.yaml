@@ -1,0 +1,130 @@
+#template process command here...
+#oc process nginx-example NAME=orange -l app=orange -o yaml > test-template.yaml
+
+apiVersion: v1
+items:
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: Exposes and load balances the application pods
+    labels:
+      app: orange
+      template: orange
+    name: orange
+  spec:
+    ports:
+    - name: web
+      port: 8080
+      targetPort: 8080
+    selector:
+      name: orange
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    annotations:
+      template.openshift.io/expose-uri: http://{.spec.host}{.spec.path}
+    labels:
+      app: orange
+      template: orange
+    name: orange
+  spec:
+    host: ""
+    to:
+      kind: Service
+      name: orange
+- apiVersion: image.openshift.io/v1
+  kind: ImageStream
+  metadata:
+    annotations:
+      description: Keeps track of changes in the application image
+    labels:
+      app: orange
+      template: orange
+    name: orange
+- apiVersion: build.openshift.io/v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: Defines how to build the application
+      template.alpha.openshift.io/wait-for-ready: "true"
+    labels:
+      app: orange
+      template: orange
+    name: orange
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: orange:latest
+    source:
+      contextDir: ""
+      git:
+        ref: ""
+        uri: https://github.com/sclorg/nginx-ex.git
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: nginx:1.20-ubi9
+          namespace: devops
+      type: Source
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - github:
+        secret: xwmmqOk8gBWcrQdNgep1UfWuQRiW3NGJojpjBqcL
+      type: GitHub
+    - generic:
+        secret: 3lTXIA2yH1SOKeaUS1ECXgwNEU0fQqD4W02PLYQD
+      type: Generic
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    annotations:
+      description: Defines how to deploy the application server
+      image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"orange:latest"},"fieldPath":
+        "spec.template.spec.containers[0].image"}]'
+      template.alpha.openshift.io/wait-for-ready: "true"
+    labels:
+      app: orange
+      template: orange
+    name: orange
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: orange
+        name: orange
+    strategy:
+      type: RollingUpdate
+    template:
+      metadata:
+        labels:
+          app: orange
+          name: orange
+      spec:
+        containers:
+        - env: []
+          image: ' '
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            timeoutSeconds: 3
+          name: nginx-example
+          ports:
+          - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 3
+            timeoutSeconds: 3
+          resources:
+            limits:
+              memory: 512Mi
+kind: List
+metadata: {}
