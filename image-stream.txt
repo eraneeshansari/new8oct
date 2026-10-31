@@ -1,0 +1,232 @@
+OPENSHIFT CLI – PRACTICAL TUTORIAL
+ImageStreams | Image Import | Image Mirroring | Deployments
+
+==================================================
+
+CREATE AND MANAGE PROJECTS
+Create a new project
+
+oc new-project test1
+
+Check current project
+
+oc project
+
+Switch to default project
+
+oc project default
+
+==================================================
+
+CREATE IMAGESTREAMS
+Create ImageStreams
+
+oc create is mango oc create is orange
+
+List ImageStreams
+
+oc get is
+
+Describe ImageStream
+
+oc describe is mango
+
+==================================================
+
+IMPORT IMAGES FROM DOCKER HUB
+Import Nginx 1.20 image
+
+oc import-image mango:1.20 --from=docker.io/library/nginx:1.20 --confirm
+
+Verify ImageStream
+
+oc get is oc describe is mango
+
+List ImageStream tags
+
+oc get istag
+
+==================================================
+
+MANAGE IMAGESTREAM TAGS
+Create latest tag from version 1.20
+
+oc tag mango:1.20 mango:latest
+
+List tags
+
+oc get istag
+
+Delete specific tags
+
+oc delete istag mango:latest oc delete istag mango:1.20
+
+==================================================
+
+MIRROR IMAGES TO OPENSHIFT INTERNAL REGISTRY
+Get internal registry route
+
+oc get route -n openshift-image-registry
+
+Login to registry
+
+oc registry login
+
+Mirror Nginx 1.21 into OpenShift registry
+
+oc image mirror docker.io/library/nginx:1.21 default-route-openshift-image-registry.apps-crc.testing/default/mango:1.21 --insecure=true
+
+Verify ImageStream
+
+oc get is oc describe is mango
+
+==================================================
+
+CREATE AND UPDATE IMAGESTREAM TAGS
+Create latest tag from version 1.21
+
+oc tag mango:1.21 mango:latest
+
+Verify tags
+
+oc get istag oc describe is mango
+
+==================================================
+
+DEPLOY APPLICATION USING IMAGESTREAM
+Create application
+
+oc new-app mango:latest
+
+Check deployment
+
+oc get deployment -o wide
+
+Check pods
+
+oc get pods
+
+Describe deployment
+
+oc describe deployment mango
+
+==================================================
+
+CONFIGURE IMAGE CHANGE TRIGGER
+Configure deployment to watch ImageStreamTag
+
+oc set triggers deploy mango --from-image=mango:latest -c mango
+
+Update latest tag
+
+oc tag mango:1.21 mango:latest
+
+Verify deployment and pods
+
+oc get deployment -o wide oc get pods
+
+==================================================
+
+DEPLOY DIRECTLY FROM EXTERNAL IMAGE
+Create application using Nginx
+
+oc new-app nginx:latest
+
+Check deployment
+
+oc get deployment -o wide
+
+Check deployment labels
+
+oc get deployment --show-labels
+
+==================================================
+
+BUILD APPLICATION FROM GITHUB
+Create Docker strategy build
+
+oc new-build https://github.com/eraneeshansari/node-hello.git#df --strategy=docker
+
+Check BuildConfig
+
+oc get buildconfigs
+
+Check builds
+
+oc get build
+
+View build logs
+
+oc logs node-hello-1-build
+
+==================================================
+
+TROUBLESHOOTING COMMANDS
+ImageStream information
+
+oc get is oc get istag oc describe is mango
+
+Build information
+
+oc get buildconfigs oc get build
+
+Deployment information
+
+oc get deployment -o wide oc describe deployment mango
+
+Pod information
+
+oc get pods oc describe pod <pod-name>
+
+View application resources
+
+oc get all
+
+==================================================
+
+DELETE RESOURCES
+Delete application resources using label
+
+oc delete all -l app=nginx
+
+Delete ImageStreams
+
+oc delete is mango node-hello
+
+==================================================
+
+QUICK COMMAND REFERENCE
+
+List ImageStreams: oc get is
+
+Describe ImageStream: oc describe is mango
+
+List ImageStream tags: oc get istag
+
+Import image: oc import-image
+
+Create image tag: oc tag
+
+Mirror image: oc image mirror
+
+Deploy application: oc new-app
+
+Configure image trigger: oc set triggers
+
+Check deployments: oc get deployment
+
+Check pods: oc get pods
+
+Delete ImageStream: oc delete is mango
+
+================================================== IMAGESTREAM DEPLOYMENT WORKFLOW
+
+Docker Hub Image | v OpenShift ImageStream | v ImageStreamTag (mango:latest) | v Deployment | v Running Pods
+
+================================================== IMPORTANT NOTES
+oc import-image imports image metadata from an external registry.
+oc image mirror copies image content from one registry to another.
+oc tag creates or updates an ImageStreamTag.
+Image Change Trigger can trigger a new deployment when the referenced image changes.
+oc delete istag deletes an ImageStreamTag, not necessarily the underlying image data.
+================================================== END OF TUTORIAL
