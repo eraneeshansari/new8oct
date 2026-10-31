@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: mango
+  name: mango
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mango
+  template:
+    metadata:
+      labels:
+        app: mango
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: myvol
+          mountPath: /usr/share/nginx/html
+
+      volumes:
+      - name: myvol
+        configMap:
+          name: web 
