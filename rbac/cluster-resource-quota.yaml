@@ -1,0 +1,17 @@
+apiVersion: quota.openshift.io/v1
+kind: ClusterResourceQuota
+metadata:
+  name: devops-cq
+spec:
+  quota:
+    hard:
+      cpu: "2"
+      memory: 2Gi
+  selector:
+    annotations: null
+    labels:
+      matchLabels:
+        env: devops
+status:
+  namespaces: null
+  total: {}

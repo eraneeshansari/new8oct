@@ -1,0 +1,129 @@
+# MULTUS NETWORK TYPES – YAML + DIAGRAMS CHEAT SHEET
+
+---
+
+1. BRIDGE NETWORK
+
+---
+
+Description:
+Same-node communication using Linux bridge. Pods can talk only within the same node.
+
+Diagram:
+Node
+├── br0 (bridge)
+│    ├── Pod A (10.10.0.101)
+│    └── Pod B (10.10.0.102)
+
+YAML:
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+name: bridge-net
+spec:
+config: '{"type":"bridge","bridge":"br0"}'
+
+---
+
+2. HOST-DEVICE NETWORK
+
+---
+
+Description:
+Pod directly uses a physical NIC. The interface is moved from host to pod.
+
+Diagram:
+Node
+├── eth1 ──> Pod (moved interface)
+
+YAML:
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+name: host-device-net
+spec:
+config: '{"type":"host-device","device":"eth1"}'
+
+---
+
+3. IPVLAN NETWORK
+
+---
+
+Description:
+Creates virtual interfaces with shared MAC. Suitable for scalable environments.
+
+Diagram:
+Node
+├── enp1s0
+│    ├── Pod A (192.168.1.201)
+│    └── Pod B (192.168.1.202)
+
+YAML:
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+name: ipvlan-net
+spec:
+config: '{"type":"ipvlan","master":"enp1s0"}'
+
+---
+
+4. MACVLAN NETWORK
+
+---
+
+Description:
+Each pod gets a real LAN IP and unique MAC. Acts like a physical device.
+
+Diagram:
+LAN Network
+├── Node (172.30.2.10)
+├── Pod A (172.30.2.210)
+└── Pod B (172.30.2.211)
+
+YAML:
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+name: macvlan-net
+spec:
+config: '{"type":"macvlan","master":"enp1s0"}'
+
+---
+
+5. POD USING MULTUS NETWORK
+
+---
+
+Description:
+Pod attaches additional network interface using Multus.
+
+YAML:
+apiVersion: v1
+kind: Pod
+metadata:
+name: test-pod
+annotations:
+k8s.v1.cni.cncf.io/networks: macvlan-net
+spec:
+containers:
+
+* name: app
+  image: nginx
+
+---
+
+## QUICK SUMMARY
+
+bridge      → same node only
+host-device → direct NIC access
+ipvlan      → scalable, shared MAC
+macvlan     → real LAN IP
+
+Multus:
+
+* Meta plugin
+* Attaches multiple networks to pod
+
+---

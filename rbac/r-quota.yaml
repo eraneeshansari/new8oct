@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mango
+  namespace: mango
+spec:
+  hard:
+    configmaps: "15"
+    cpu: "2"
+    count/deployments: "5"
+    memory: 2Gi
+    pods: "10"

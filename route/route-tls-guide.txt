@@ -1,0 +1,565 @@
+OpenShift Hands-on Tutorial: Routes, TLS and Ingress
+Prerequisites
+A working OpenShift cluster (CRC or OpenShift).
+oc CLI installed and logged in.
+An active OpenShift project.
+
+Check your cluster:
+
+
+oc whoami
+oc project
+oc get nodes
+
+LAB 1: Create Deployment and Service
+Step 1: Create an Nginx deployment
+
+oc create deployment mango --image=nginx --port=80
+
+
+Explanation:
+
+create deployment: Creates a deployment.
+mango: Deployment name.
+--image=nginx: Uses the Nginx container image.
+--port=80: Specifies the container port.
+Step 2: Verify pods
+
+oc get pods
+
+Step 3: Expose deployment as a service
+
+oc expose deployment mango
+
+Step 4: Verify service
+
+oc get svc
+
+Step 5: Create a default OpenShift route
+
+oc expose svc mango
+
+Step 6: Verify route
+
+oc get route
+
+
+The route exposes the mango service externally through the OpenShift router.
+
+LAB 2: Path-Based Routing
+
+Objective: Access the application using /shop in the URL.
+
+Step 1: Create a route with a path
+
+oc expose svc mango --path="/shop" --port=80
+
+Step 2: Verify route
+
+oc get route
+
+Step 3: Generate route YAML without creating it
+
+oc expose svc mango --path="/shop" --port=80 --dry-run=client -o yaml
+
+
+Explanation:
+
+--dry-run=client: Generates the resource without creating it.
+-o yaml: Displays YAML output.
+Step 4: Create a directory for route configuration
+
+mkdir -p route
+cd route/
+
+Step 5: Generate route YAML file
+
+oc expose svc mango --path="/shop" --port=80 --dry-run=client -o yaml > path-route.yaml
+
+Step 6: View YAML file
+
+cat path-route.yaml
+
+Step 7: Edit route YAML if required
+
+vi path-route.yaml
+
+Step 8: Create route from YAML
+
+oc create -f path-route.yaml
+
+
+Note: If a route with the same name already exists, delete it before recreating it.
+
+
+oc delete route mango
+
+Step 9: Verify
+
+oc get routes
+oc describe route mango
+
+LAB 3: Custom Hostname Routing
+
+Objective: Access the application using a custom hostname.
+
+Example hostname: www.sam.com
+
+Step 1: Generate route YAML with hostname
+
+oc expose svc mango --hostname=www.sam.com --path="/shop" --port=80 --dry-run=client -o yaml > path-host.yaml
+
+Step 2: View generated YAML
+
+cat path-host.yaml
+
+Step 3: Create route
+
+oc create -f path-host.yaml
+
+Step 4: Verify route
+
+oc get route
+oc describe route mango
+
+Step 5: Configure local hostname resolution
+
+Find the route's ingress hostname:
+
+
+oc get route mango
+
+
+On your local Linux machine, edit:
+
+
+sudo vi /etc/hosts
+
+
+Add the appropriate IP address and hostname:
+
+text
+<ROUTER-IP> www.sam.com
+
+
+Find a router IP using:
+
+
+oc get svc -n openshift-ingress
+
+
+Note: Use the actual router IP or a suitable address that resolves to your OpenShift router. A service ClusterIP is not necessarily externally reachable.
+
+LAB 4: Edge TLS Route
+
+Objective: Configure HTTPS termination at the OpenShift router.
+
+In Edge TLS, the client connects to the router using HTTPS. The router terminates TLS and forwards traffic to the backend service.
+
+Step 1: Generate a self-signed certificate
+
+openssl req -x509 -newkey rsa:2048 -nodes \
+-keyout tls.key \
+-out tls.crt \
+-days 365 \
+-subj "/CN=tlsapp.apps-crc.testing"
+
+Step 2: Verify certificate files
+
+ls -l tls.*
+
+Step 3: Create TLS Edge route
+
+oc create route edge tlsapp \
+--service=mango \
+--hostname=tlsapp.apps-crc.testing \
+--cert=tls.crt \
+--key=tls.key
+
+Step 4: Verify route
+
+oc get route
+oc describe route tlsapp
+
+Step 5: Test HTTPS
+
+curl -k https://tlsapp.apps-crc.testing
+
+
+-k is used because the certificate is self-signed and is not trusted by default.
+
+Step 6: Delete Edge route
+
+oc delete route tlsapp
+
+LAB 5: Create TLS Secret
+
+Objective: Store TLS certificate and private key inside OpenShift.
+
+Step 1: Create TLS secret
+
+oc create secret tls nginx-tls --cert=tls.crt --key=tls.key
+
+Step 2: Verify secrets
+
+oc get secrets
+
+Step 3: Describe TLS secret
+
+oc describe secret nginx-tls
+
+Step 4: View secret YAML
+
+oc get secret nginx-tls -o yaml
+
+
+Note: Secret data is Base64 encoded, not encrypted merely by being Base64 encoded. Avoid sharing secret YAML or private keys.
+
+LAB 6: Passthrough TLS Route
+
+Objective: Configure TLS encryption between the client and the application.
+
+In Passthrough TLS:
+
+The router does not terminate TLS.
+The encrypted connection is forwarded to the backend.
+Nginx handles the TLS certificate and HTTPS connection.
+Step 1: Create TLS certificate for backend
+
+openssl req -x509 -newkey rsa:2048 -nodes \
+-keyout tls.key \
+-out tls.crt \
+-days 365 \
+-subj "/CN=tlsapp.apps-crc.testing"
+
+Step 2: Create TLS secret
+
+oc create secret tls nginx-tls --cert=tls.crt --key=tls.key
+
+Step 3: Create Nginx ConfigMap
+
+oc create configmap nginx-conf --from-literal=nginx.conf='
+events {}
+http {
+  server {
+    listen 8443 ssl;
+    server_name tlsapp.apps-crc.testing;
+
+    ssl_certificate /etc/nginx/tls/tls.crt;
+    ssl_certificate_key /etc/nginx/tls/tls.key;
+
+    location / {
+      return 200 "Hello from Passthrough TLS\n";
+    }
+  }
+}'
+
+Step 4: Verify ConfigMap
+
+oc get cm
+oc describe cm nginx-conf
+
+Step 5: Remove previous mango resources if no longer needed
+
+oc delete deployment mango
+oc delete svc mango
+
+Step 6: Create Nginx deployment
+
+oc create deployment nginx --image=nginx --port=8443
+
+Step 7: Expose deployment
+
+oc expose deployment nginx --port=8443
+
+Step 8: Mount TLS secret
+
+oc set volume deployment/nginx \
+--add \
+--name=tls \
+--secret-name=nginx-tls \
+--mount-path=/etc/nginx/tls
+
+Step 9: Mount ConfigMap as Nginx configuration
+
+oc set volume deployment/nginx \
+--add \
+--name=config \
+--configmap-name=nginx-conf \
+--mount-path=/etc/nginx/nginx.conf \
+--sub-path=nginx.conf
+
+Step 10: Create Passthrough route
+
+oc create route passthrough nginx \
+--service=nginx \
+--hostname=tlsapp.apps-crc.testing \
+--port=8443
+
+Step 11: Verify route
+
+oc get route
+oc describe route nginx
+
+Step 12: Check pods
+
+oc get pods
+
+Step 13: Test HTTPS
+
+curl -k https://tlsapp.apps-crc.testing
+
+
+Expected response:
+
+text
+Hello from Passthrough TLS
+
+LAB 7: Re-encrypt TLS Route
+
+Objective: Configure TLS encryption between both client-to-router and router-to-backend connections.
+
+In Re-encrypt TLS:
+
+Client connects to router using HTTPS.
+Router terminates the client TLS connection.
+Router establishes another TLS connection to backend.
+Backend presents its own TLS certificate.
+Step 1: Generate backend certificate
+
+openssl req -x509 -newkey rsa:2048 -nodes \
+-keyout tls.key \
+-out tls.crt \
+-days 365 \
+-subj "/CN=nginx.default.svc"
+
+Step 2: Create backend TLS secret
+
+oc create secret tls backend-tls --cert=tls.crt --key=tls.key
+
+Step 3: Verify secret
+
+oc get secrets
+oc describe secret backend-tls
+
+Step 4: Create Nginx ConfigMap
+
+oc create configmap nginx-conf --from-literal=nginx.conf='
+events {}
+http {
+  server {
+    listen 8443 ssl;
+
+    ssl_certificate /etc/nginx/tls/tls.crt;
+    ssl_certificate_key /etc/nginx/tls/tls.key;
+
+    location / {
+      return 200 "Hello from Re-encrypt TLS\n";
+    }
+  }
+}'
+
+Step 5: Verify ConfigMap
+
+oc get cm
+oc describe cm nginx-conf
+
+Step 6: Create Nginx deployment
+
+oc create deployment nginx --image=nginx --port=8443
+
+Step 7: Expose deployment
+
+oc expose deployment nginx --port=8443
+
+Step 8: Mount backend TLS secret
+
+oc set volume deployment/nginx \
+--add \
+--name=tls \
+--secret-name=backend-tls \
+--mount-path=/etc/nginx/tls
+
+Step 9: Mount ConfigMap
+
+oc set volume deployment/nginx \
+--add \
+--name=config \
+--configmap-name=nginx-conf \
+--mount-path=/etc/nginx/nginx.conf \
+--sub-path=nginx.conf
+
+Step 10: Generate router certificate
+
+openssl req -x509 -newkey rsa:2048 -nodes \
+-keyout route.key \
+-out route.crt \
+-days 365 \
+-subj "/CN=tlsapp.apps-crc.testing"
+
+Step 11: Create Re-encrypt route
+
+oc create route reencrypt nginx \
+--service=nginx \
+--hostname=tlsapp.apps-crc.testing \
+--cert=route.crt \
+--key=route.key \
+--dest-ca-cert=tls.crt \
+--port=8443
+
+
+Note: --dest-ca-cert supplies the CA certificate used by the router to verify the backend certificate. For a production deployment, use a trusted CA and ensure the backend certificate identity and router verification settings are correct. A self-signed certificate may require additional trust configuration.
+
+Step 12: Verify route
+
+oc get route
+oc describe route nginx
+
+Step 13: Test application
+
+curl -k https://tlsapp.apps-crc.testing
+
+
+Expected response:
+
+text
+Hello from Re-encrypt TLS
+
+LAB 8: Ingress Resource
+
+Objective: Create an Ingress resource and expose an application using hostname-based routing.
+
+Step 1: Clean up previous resources
+
+Only run this cleanup if you no longer need the previous nginx resources.
+
+
+oc delete svc,deployment nginx
+
+Step 2: Create a test pod
+
+oc run test --image=nginx --port=80
+
+Step 3: Verify pod
+
+oc get pods
+
+Step 4: Expose pod as service
+
+oc expose pod test
+
+Step 5: Verify service
+
+oc get svc
+
+Step 6: Create Ingress resource
+
+oc create ingress myapp \
+--rule="myapp.apps-crc.testing/*=test:80"
+
+Step 7: Verify Ingress
+
+oc get ingress
+oc describe ingress myapp
+
+Step 8: Check generated OpenShift route
+
+oc get routes
+
+
+OpenShift can use its ingress controller to implement Kubernetes Ingress resources through routes.
+
+LAB 9: Useful Troubleshooting Commands
+
+Check deployments:
+
+
+oc get deployment
+oc describe deployment nginx
+
+
+Check pods:
+
+
+oc get pods -o wide
+
+
+Check services:
+
+
+oc get svc
+oc describe svc nginx
+
+
+Check routes:
+
+
+oc get routes
+oc describe route nginx
+
+
+Check Ingress:
+
+
+oc get ingress
+oc describe ingress myapp
+
+
+Check ConfigMaps:
+
+
+oc get configmaps
+oc describe configmap nginx-conf
+
+
+Check secrets:
+
+
+oc get secrets
+
+
+Check application logs:
+
+
+oc logs deployment/nginx
+
+
+Check events:
+
+
+oc get events --sort-by=.metadata.creationTimestamp
+
+
+Access a running pod:
+
+
+oc rsh <pod-name>
+
+LAB 10: Cleanup
+
+Remove resources created during the labs when they are no longer required.
+
+
+oc delete ingress myapp --ignore-not-found
+oc delete route nginx --ignore-not-found
+oc delete route tlsapp --ignore-not-found
+oc delete deployment nginx --ignore-not-found
+oc delete svc nginx --ignore-not-found
+oc delete pod test --ignore-not-found
+oc delete svc test --ignore-not-found
+oc delete secret nginx-tls --ignore-not-found
+oc delete secret backend-tls --ignore-not-found
+oc delete configmap nginx-conf --ignore-not-found
+
+IMPORTANT: TLS Route Comparison
+Feature	Edge	Passthrough	Re-encrypt
+Client to router	HTTPS	HTTPS	HTTPS
+Router terminates TLS	Yes	No	Yes
+Router to backend	HTTP	TLS	TLS
+Backend TLS required	No	Yes	Yes
+Backend certificate verification	Not applicable	Not applicable at router	Configurable
+Important OpenShift Commands to Remember
+
+
+
+

@@ -1,0 +1,348 @@
+OpenShift HTPasswd Authentication and RBAC 
+Step 1: Create an HTPasswd file
+
+Create users named admin and sam.
+
+
+htpasswd -c users admin
+htpasswd users sam
+
+
+Enter passwords when prompted.
+
+Verify the file:
+
+
+cat users
+
+
+Note: The -c option creates a new file. Do not use it when adding subsequent users because it overwrites the existing file.
+
+Step 2: Create an HTPasswd secret
+
+Create a secret in the openshift-config namespace.
+
+
+oc create secret generic htpasswd-new \
+  --from-file=htpasswd=users \
+  -n openshift-config
+
+
+Verify:
+
+
+oc get secrets -n openshift-config
+
+Step 3: Take a backup of OAuth configuration
+
+Before making changes, take a backup.
+
+
+oc get oauth cluster -o yaml > /tmp/cluster.yaml
+
+
+Check the existing OAuth configuration:
+
+
+oc get oauth cluster -o yaml
+
+Step 4: Configure HTPasswd authentication
+
+Edit the OAuth configuration.
+
+
+oc edit oauth cluster
+
+
+Add the following identity provider under spec.identityProviders:
+
+yaml
+spec:
+  identityProviders:
+  - name: htpasswd-new
+    mappingMethod: claim
+    type: HTPasswd
+    htpasswd:
+      fileData:
+        name: htpasswd-new
+
+
+Important: If identity providers already exist, add this entry without removing the existing providers.
+
+Save and exit.
+
+Step 5: Verify authentication pods
+
+oc get pods -n openshift-authentication
+
+
+Wait for the authentication configuration to be applied.
+
+If necessary, delete an authentication pod to trigger recreation:
+
+
+oc delete pod <oauth-pod-name> -n openshift-authentication
+
+
+Verify:
+
+
+oc get pods -n openshift-authentication
+
+Step 6: Verify OpenShift users
+
+oc get users
+
+
+Check identities:
+
+
+oc get identities
+
+
+Log in using the newly created user:
+
+
+oc login -u sam
+
+
+Enter the password when prompted.
+
+Step 7: Assign admin role to a user
+
+Assign the admin role to the user admin in the devops project.
+
+
+oc adm policy add-role-to-user admin admin -n devops
+
+
+Verify:
+
+
+oc get rolebindings -n devops
+oc auth can-i --list -n devops --as=admin
+
+
+Remove the admin role:
+
+
+oc adm policy remove-role-from-user admin admin -n devops
+
+Step 8: Create a custom Role
+
+Create a Role named testrole.
+
+Allow users to get, list, create and delete pods, deployments and configmaps.
+
+
+kubectl create role testrole \
+  --verb=get,list,create,delete \
+  --resource=pods,deployments,configmaps \
+  -n devops \
+  --dry-run=client -o yaml
+
+
+Create the Role:
+
+
+kubectl create role testrole \
+  --verb=get,list,create,delete \
+  --resource=pods,deployments,configmaps \
+  -n devops
+
+
+Verify:
+
+
+kubectl get roles -n devops
+kubectl describe role testrole -n devops
+
+Step 9: Create a RoleBinding
+
+Bind the custom Role to user aneesh.
+
+
+kubectl create rolebinding testrb \
+  --role=testrole \
+  --user=aneesh \
+  -n devops
+
+
+Verify:
+
+
+kubectl get rolebindings -n devops
+kubectl describe rolebinding testrb -n devops
+
+
+Check permissions:
+
+
+oc auth can-i create pods -n devops --as=aneesh
+oc auth can-i delete pods -n devops --as=aneesh
+
+Step 10: Create an OpenShift group
+
+Create a group named jenkins.
+
+
+oc adm groups new jenkins
+
+
+Add user sam to the group.
+
+
+oc adm groups add-users jenkins sam
+
+
+Verify:
+
+
+oc get groups
+oc describe group jenkins
+
+Step 11: Assign admin role to a group
+
+Assign the admin role to the jenkins group in the devops namespace.
+
+
+oc adm policy add-role-to-group admin jenkins -n devops
+
+
+Verify:
+
+
+oc get rolebindings -n devops
+
+
+Remove the permission:
+
+
+oc adm policy remove-role-from-group admin jenkins -n devops
+
+Step 12: Update the HTPasswd file
+
+Extract the existing HTPasswd secret.
+
+
+oc -n openshift-config extract secret/htpasswd-new --to=./ --confirm
+
+
+Add another user or update an existing user's password.
+
+Example:
+
+
+htpasswd htpasswd sam
+
+
+Update the existing secret:
+
+
+oc set data secret htpasswd-new \
+  --from-file=htpasswd=htpasswd \
+  -n openshift-config
+
+
+Verify:
+
+
+oc get secret htpasswd-new -n openshift-config
+
+Step 13: Understand OpenShift users and identities
+
+List users:
+
+
+oc get users
+
+
+List identities:
+
+
+oc get identities
+
+
+Delete a user if required:
+
+
+oc delete user sam
+
+
+Delete an identity if required:
+
+
+oc delete identity samsapp:sam
+
+
+Important: Deleting users and identities can affect account access and identity mappings. Verify the identity name and dependencies before deletion.
+
+Step 14: Useful troubleshooting commands
+
+Check OAuth:
+
+
+oc get oauth cluster -o yaml
+
+
+Check authentication pods:
+
+
+oc get pods -n openshift-authentication
+
+
+Check secrets:
+
+
+oc get secrets -n openshift-config
+
+
+Check users:
+
+oc get users
+
+
+Check groups:
+
+
+oc get groups
+
+
+Check Roles and RoleBindings:
+
+
+oc get roles -n devops
+oc get rolebindings -n devops
+
+
+Check permissions:
+
+
+oc auth can-i --list -n devops
+
+Step 15: Cleanup (Optional)
+
+Remove the RoleBinding:
+
+
+oc delete rolebinding testrb -n devops
+
+
+Remove the custom Role:
+
+
+oc delete role testrole -n devops
+
+
+Remove the group:
+
+
+oc adm groups remove-users jenkins sam
+oc adm groups delete jenkins
+
+
+Remove the HTPasswd identity provider from OAuth before deleting its secret.
+
+Only after confirming that OAuth no longer references the secret:
+
+

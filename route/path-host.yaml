@@ -1,0 +1,16 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  labels:
+    app: mango
+  name: mango
+spec:
+  host: www.sam.com
+  path: /shop
+  port:
+    targetPort: 80
+  to:
+    kind: ""
+    name: mango
+    weight: null
+status: {}

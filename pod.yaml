@@ -3,11 +3,18 @@ kind: Pod
 metadata:
   labels:
     app: myapp
-  name: test
-  namespace: devops
+  name: abcpod
 spec:
   containers:
   - image: nginx:latest
     name: test
     ports:
     - containerPort: 80
+    resources:
+      requests: 
+        memory: 256Mi
+        cpu: 300m
+      limits: 
+         memory: 512Mi
+         cpu: 1
+
