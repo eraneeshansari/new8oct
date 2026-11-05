@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: test
+  name: webpod
+spec:
+  containers:
+  - image: nginx
+    name: test
+    ports:
+    - containerPort: 80
+#    securityContext:
+#      allowPrivilegeEscalation: false
+#      capabilities:
+#        drop: ["ALL"]
+#      runAsNonRoot: true
+#      seccompProfile: 
+#        type: RuntimeDefault
+#
+#Error from server (Forbidden): pods "test" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "test" must set securityContext.allowPrivilegeEscalation=false), unrestricted capabilities (container "test" must set securityContext.capabilities.drop=["ALL"]), runAsNonRoot != true (pod or container "test" must set securityContext.runAsNonRoot=true), seccompProfile (pod or container "test" must set securityContext.seccompProfile.type to "RuntimeDefault" or "Localhost")
+

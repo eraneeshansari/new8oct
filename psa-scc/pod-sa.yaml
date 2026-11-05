@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: test
+  name: newpod
+spec:
+  serviceAccountName: sam
+  containers:
+  - image: nginx
+    name: test
+    ports:
+    - containerPort: 80
+#    securityContext:
+#      allowPrivilegeEscalation: false
+#      capabilities:
+#        drop: ["ALL"]
+#      runAsNonRoot: true
+#      seccompProfile: 
+#        type: RuntimeDefault
